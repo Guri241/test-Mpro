@@ -1,11 +1,5 @@
 import { redirect } from 'next/navigation'
-import { prisma } from '@/app/lib/prisma'
 
-
-export const dynamic = 'force-dynamic'
-
-export default async function Home() {
-  const s = await prisma.session.findFirst({ select: { id: true } })
-  if (!s) redirect('/setup') 
-  redirect(`/sessions/${s.id}`) 
+export default function Home() {
+  redirect('/sessions/99d2e8a5-57dc-4a34-80b7-a20e681f5df3')
 }
