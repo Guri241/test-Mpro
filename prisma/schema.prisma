@@ -1,0 +1,163 @@
+// ===== prisma/schema.prisma ここから =====
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * --- Enums ---
+ */
+enum Role {
+  ADMIN
+  LEAD
+  EVALUATOR
+  VIEWER
+}
+
+enum ItemType {
+  NUMBER
+  TEXT
+  BOOL
+  SELECT
+  MULTISELECT
+  RANGE
+  DATE
+  TIME
+}
+
+enum TemplateStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/**
+ * --- Models ---
+ */
+model User {
+  id         String     @id @default(uuid())
+  name       String
+  email      String     @unique
+  role       Role
+  createdAt  DateTime   @default(now())
+  responses  Response[] @relation("ResponseCreatedBy")
+  responsesU Response[] @relation("ResponseUpdatedBy")
+}
+
+model Product {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  name      String
+  model     String?
+  note      String?
+  createdAt DateTime  @default(now())
+  sessions  Session[]
+}
+
+model EvaluationTemplate {
+  id        String         @id @default(uuid())
+  name      String
+  version   Int            @default(1)
+  status    TemplateStatus
+  meta      Json           @default("{}")
+  createdAt DateTime       @default(now())
+  items     TemplateItem[]
+  sessions  Session[]
+}
+
+model TemplateItem {
+  id          String             @id @default(uuid())
+  template    EvaluationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateId  String
+  key         String
+  label       String
+  type        ItemType
+  required    Boolean            @default(false)
+  unit        String?
+  options     Json?
+  weight      Decimal            @default(1) @db.Decimal(8, 3)
+  order       Int                @default(0)
+  responses   Response[]
+  attachments Attachment[]
+}
+
+model Session {
+  id          String             @id @default(uuid())
+  product     Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId   String
+  template    EvaluationTemplate @relation(fields: [templateId], references: [id])
+  templateId  String
+  name        String
+  startedAt   DateTime?
+  endedAt     DateTime?
+  meta        Json               @default("{}")
+  createdAt   DateTime           @default(now())
+  responses   Response[]
+  attachments Attachment[]
+  tags        SessionTag[]
+}
+
+model Response {
+  id          String       @id @default(uuid())
+  session     Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId   String
+  item        TemplateItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId      String
+  value       Json
+  remark      String?
+  scored      Decimal?     @db.Decimal(12, 4)
+  createdBy   User?        @relation("ResponseCreatedBy", fields: [createdById], references: [id])
+  createdById String?
+  updatedBy   User?        @relation("ResponseUpdatedBy", fields: [updatedById], references: [id])
+  updatedById String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([sessionId, itemId, createdAt])
+}
+
+
+model Attachment {
+  id         String        @id @default(uuid())
+  session    Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId  String
+  item       TemplateItem? @relation(fields: [itemId], references: [id])
+  itemId     String?
+  filename   String
+  url        String
+  size       Int?
+  mime       String?
+  uploadedBy String?
+  uploadedAt DateTime      @default(now())
+}
+
+model Tag {
+  id       String       @id @default(uuid())
+  name     String       @unique
+  sessions SessionTag[]
+}
+
+model SessionTag {
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId String
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId     String
+
+  @@id([sessionId, tagId])
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  diff      Json?
+  createdAt DateTime @default(now())
+}
+
+// ===== prisma/schema.prisma ここまで =====
