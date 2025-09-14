@@ -1,25 +1,57 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/app/lib/prisma'
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const { id } = params
-  const { values } = await req.json()
+type Payload = {
+  items: Array<{
+    itemId: string
+    value: any
+    remark?: string | null
+  }>
+}
 
+/**
+ * 一括保存
+ * POST /api/sessions/:id/bulk-save
+ */
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } } // ← Promise ではなく同期オブジェクト
+) {
+  const sessionId = params.id
+
+  let body: Payload
   try {
-    // まとめて保存
-    for (const [itemId, value] of Object.entries(values)) {
-      await prisma.response.create({
-        data: {
-          sessionId: id,
-          itemId,
-          value: typeof value === 'boolean' ? String(value) : String(value),
+    body = (await req.json()) as Payload
+  } catch {
+    return NextResponse.json({ ok: false, error: 'invalid json' }, { status: 400 })
+  }
+
+  if (!Array.isArray(body.items)) {
+    return NextResponse.json({ ok: false, error: 'items is required' }, { status: 400 })
+  }
+
+  const now = new Date()
+
+  // まとめて upsert（トランザクション）
+  const result = await prisma.$transaction(
+    body.items.map((it) =>
+      prisma.response.upsert({
+        where: { sessionId_itemId: { sessionId, itemId: it.itemId } },
+        create: {
+          sessionId,
+          itemId: it.itemId,
+          value: it.value,
+          remark: it.remark ?? null,
+          // 必要に応じて scored を計算して入れる
+        },
+        update: {
+          value: it.value,
+          remark: it.remark ?? null,
+          updatedAt: now,
         },
       })
-    }
+    )
+  )
 
-    return NextResponse.json({ ok: true })
-  } catch (err) {
-    console.error(err)
-    return NextResponse.json({ error: '保存失敗' }, { status: 500 })
-  }
+  return NextResponse.json({ ok: true, count: result.length })
 }
