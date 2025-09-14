@@ -1,26 +1,34 @@
+// app/api/sessions/[id]/bulk-save/route.ts
 import { NextResponse } from 'next/server'
-import { prisma } from '@/app/lib/prisma'
+import prisma from '@/app/lib/prisma'   // default import (どちらでもOK)
+import type { NextRequest } from 'next/server'
 
-export async function POST(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
-  const { id } = params
-  const body = await req.json()
+type Payload = {
+  itemId: string
+  value: string | number | boolean | null
+}
 
+export async function POST(req: NextRequest, context: { params: { id: string } }) {
   try {
-    // 複数レスポンスをまとめて保存
+    const sessionId = context.params.id
+    const body = (await req.json()) as Payload[]
+
+    // 既存レスポンス削除してから一括保存
+    await prisma.response.deleteMany({
+      where: { sessionId }
+    })
+
     await prisma.response.createMany({
-      data: body.responses.map((r: any) => ({
-        sessionId: id,
-        itemId: r.itemId,
-        value: r.value,
-      })),
+      data: body.map((row) => ({
+        sessionId,
+        itemId: row.itemId,
+        value: row.value,
+      }))
     })
 
     return NextResponse.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    return NextResponse.json({ ok: false }, { status: 500 })
+  } catch (err) {
+    console.error(err)
+    return NextResponse.json({ ok: false, error: String(err) }, { status: 500 })
   }
 }
