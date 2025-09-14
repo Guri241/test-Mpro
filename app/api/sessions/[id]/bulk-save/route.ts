@@ -1,17 +1,25 @@
-import { prisma } from '@/app/lib/prisma'
 import { NextResponse } from 'next/server'
+import { prisma } from '@/app/lib/prisma'
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const { id: sessionId } = params
-  const { responses } = await req.json() // [{ itemId, value, remark }, ...]
+  const { id } = params
+  const { values } = await req.json()
 
-  for (const r of responses) {
-    await prisma.response.upsert({
-      where: { sessionId_itemId: { sessionId, itemId: r.itemId } },
-      create: { sessionId, itemId: r.itemId, value: r.value, remark: r.remark },
-      update: { value: r.value, remark: r.remark, updatedAt: new Date() },
-    })
+  try {
+    // まとめて保存
+    for (const [itemId, value] of Object.entries(values)) {
+      await prisma.response.create({
+        data: {
+          sessionId: id,
+          itemId,
+          value: typeof value === 'boolean' ? String(value) : String(value),
+        },
+      })
+    }
+
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    console.error(err)
+    return NextResponse.json({ error: '保存失敗' }, { status: 500 })
   }
-
-  return NextResponse.json({ ok: true })
 }

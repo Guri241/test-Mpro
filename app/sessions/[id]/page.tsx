@@ -1,226 +1,90 @@
 'use client'
 
-import { use, useEffect, useMemo, useState } from 'react'
+import { use, useState } from 'react'
 import useSWR from 'swr'
-
-type Item = {
-  id: string
-  label: string
-  key: string
-  type: 'NUMBER' | 'TEXT' | 'BOOL'
-  unit?: string | null
-  required: boolean
-  order: number
-}
-
-type ApiResponse = {
-  session: { id: string; name: string; product?: { name?: string }; templateId?: string }
-  items: Item[]
-  responses: Array<{
-    itemId: string
-    value: any
-    remark?: string | null
-  }>
-}
 
 const fetcher = (u: string) => fetch(u).then(r => r.json())
 
-function toFlatValue(v: any): string | number | boolean | '' {
-  // レスポンスのvalueは { value: X } の形でも来るので平坦化
-  if (v && typeof v === 'object' && 'value' in v) v = (v as any).value
-  if (typeof v === 'number') return v
-  if (typeof v === 'boolean') return v
-  if (typeof v === 'string') return v
-  return ''
-}
-
-export default function SessionPage({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}) {
-  // Next.js 15 の params は Promise なので use() で展開
+export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+  const { data, isLoading, mutate } = useSWR(`/api/sessions/${id}`, fetcher)
 
-  const { data, mutate, isLoading } = useSWR<ApiResponse>(
-    `/api/sessions/${id}`,
-    fetcher
-  )
-
-  // 画面ローカルの編集用状態（全項目）
-  // form[itemId] = { value, remark }
-  const [form, setForm] = useState<Record<string, { value: any; remark?: string }>>({})
-  const [saving, setSaving] = useState(false)
-
-  // 初期値を API から流し込む
-  useEffect(() => {
-    if (!data) return
-    const next: Record<string, { value: any; remark?: string }> = {}
-    for (const it of data.items) {
-      const r = data.responses.find(x => x.itemId === it.id)
-      const base = toFlatValue(r?.value)
-      next[it.id] = { value: base ?? (it.type === 'BOOL' ? false : '') }
-    }
-    setForm(next)
-  }, [data])
-
-  const header = useMemo(() => {
-    if (!data) return null
-    return (
-      <header className="mb-4">
-        <h1 className="text-2xl font-bold">{data.session.name ?? 'セッション'}</h1>
-        <p className="text-sm text-gray-500">
-          対象: {data.session.product?.name ?? '-'}
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2 text-sm">
-          <a
-            className="inline-flex items-center gap-1 rounded-full border px-3 py-1 hover:bg-gray-50"
-            href={`/sessions/${id}/dashboard`}
-          >
-            📈 グラフ
-          </a>
-          <a
-            className="inline-flex items-center gap-1 rounded-full border px-3 py-1 hover:bg-gray-50"
-            href={`/api/export/sessions/${id}/csv`}
-          >
-            ⬇️ CSV
-          </a>
-          {data.session.templateId && (
-            <a
-              className="inline-flex items-center gap-1 rounded-full border px-3 py-1 hover:bg-gray-50"
-              href={`/templates/${data.session.templateId}/edit`}
-            >
-              ✚ 項目追加・編集
-            </a>
-          )}
-        </div>
-      </header>
-    )
-  }, [data, id])
-
-  // 入力変更ハンドラ（型ごとに整える）
-  function setValue(item: Item, raw: any) {
-    setForm(prev => {
-      const current = { ...(prev[item.id] || {}) }
-
-      if (item.type === 'NUMBER') {
-        const n = raw === '' ? '' : Number(raw)
-        current.value = Number.isFinite(n) ? n : ''
-      } else if (item.type === 'BOOL') {
-        current.value = raw === 'true' || raw === true
-      } else {
-        // TEXT
-        current.value = String(raw ?? '')
-      }
-
-      return { ...prev, [item.id]: current }
-    })
-  }
-
-  // 保存（まとめて保存）
-  async function handleSave() {
-    if (!data) return
-    setSaving(true)
-    try {
-      // payload を item の順に構築
-      const responses = data.items.map(it => {
-        const v = form[it.id]?.value
-        // API 側では { value: ... } でもそのままでも upsert 可能だが、
-        // ここでは { value: ... } で統一
-        return {
-          itemId: it.id,
-          value:
-            it.type === 'NUMBER'
-              ? (typeof v === 'number' ? v : Number(v || 0))
-              : it.type === 'BOOL'
-              ? Boolean(v)
-              : String(v ?? ''),
-        }
-      })
-
-      const res = await fetch(`/api/sessions/${id}/bulk-save`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ responses }),
-      })
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || '保存に失敗しました')
-      }
-
-      // 再取得
-      await mutate()
-      // 軽いフィードバック
-      alert('保存しました')
-    } catch (e: any) {
-      console.error(e)
-      alert(e?.message ?? '保存に失敗しました')
-    } finally {
-      setSaving(false)
-    }
-  }
+  // 入力値をまとめて管理する state
+  const [values, setValues] = useState<Record<string, string | number | boolean>>({})
 
   if (isLoading || !data) {
-    return <div className="p-6 text-gray-500">Loading...</div>
+    return (
+      <div className="min-h-dvh grid place-items-center bg-gray-50 dark:bg-zinc-900">
+        <div className="animate-pulse text-gray-500 dark:text-gray-400">Loading…</div>
+      </div>
+    )
+  }
+
+  // 入力変更ハンドラ
+  const handleChange = (itemId: string, value: string | number | boolean) => {
+    setValues(prev => ({ ...prev, [itemId]: value }))
+  }
+
+  // 一斉保存処理
+  const handleSave = async () => {
+    const res = await fetch(`/api/sessions/${id}/bulk-save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    })
+
+    if (res.ok) {
+      alert('保存しました')
+      mutate() // 再取得して反映
+    } else {
+      alert('保存に失敗しました')
+    }
   }
 
   return (
-    <main className="p-6 space-y-6">
-      {header}
+    <main className="min-h-dvh bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-black">
+      <div className="mx-auto max-w-3xl px-4 py-6 space-y-6">
+        <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+          {data.session.name}
+        </h1>
 
-      {/* 入力リスト */}
-      <section className="space-y-4">
-        {data.items.map(it => (
-          <div key={it.id} className="border rounded-xl p-4">
-            <div className="font-semibold">
-              {it.label}{' '}
-              <span className="text-xs text-gray-500">{it.unit ?? ''}</span>
-            </div>
+        {/* 入力フォーム */}
+        {data.items.map((item: any) => (
+          <div key={item.id} className="rounded-lg border p-4 bg-white dark:bg-zinc-800">
+            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+              {item.label}
+            </label>
+            <input
+              type={item.type === 'NUMBER' ? 'number' : item.type === 'BOOL' ? 'checkbox' : 'text'}
+              value={
+                item.type === 'BOOL'
+                  ? undefined // チェックボックスは value ではなく checked を使う
+                  : String(values[item.id] ?? '')
+              }
+              checked={item.type === 'BOOL' ? Boolean(values[item.id]) : undefined}
+              onChange={e =>
+                handleChange(
+                  item.id,
+                  item.type === 'BOOL'
+                    ? e.target.checked
+                    : e.target.value
+                )
+              }
+              className="w-full rounded-md border px-3 py-2 text-sm text-gray-900 dark:text-white dark:bg-zinc-700"
+            />
 
-            {/* フィールド */}
-            {it.type === 'NUMBER' && (
-              <input
-                type="number"
-                step="any"
-                className="mt-2 border rounded px-2 py-1 w-56"
-                value={form[it.id]?.value ?? ''}
-                onChange={e => setValue(it, e.currentTarget.value)}
-              />
-            )}
-
-            {it.type === 'TEXT' && (
-              <input
-                type="text"
-                className="mt-2 border rounded px-2 py-1 w-full max-w-xl"
-                value={form[it.id]?.value ?? ''}
-                onChange={e => setValue(it, e.currentTarget.value)}
-              />
-            )}
-
-            {it.type === 'BOOL' && (
-              <select
-                className="mt-2 border rounded px-2 py-1 w-40"
-                value={(form[it.id]?.value ?? false) ? 'true' : 'false'}
-                onChange={e => setValue(it, e.currentTarget.value)}
-              >
-                <option value="true">合格</option>
-                <option value="false">不合格</option>
-              </select>
-            )}
           </div>
         ))}
-      </section>
 
-      {/* 一番下に保存ボタン（要求どおり） */}
-      <div className="pt-2">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center gap-2 rounded-lg bg-black text-white px-5 py-2.5 hover:opacity-90 disabled:opacity-50"
-        >
-          {saving ? '保存中…' : 'すべて保存する'}
-        </button>
+        {/* 保存ボタン（ページ最下部） */}
+        <div className="pt-6">
+          <button
+            onClick={handleSave}
+            className="w-full rounded-xl bg-blue-600 px-4 py-3 text-white font-semibold shadow hover:bg-blue-700"
+          >
+            全て保存する
+          </button>
+        </div>
       </div>
     </main>
   )
