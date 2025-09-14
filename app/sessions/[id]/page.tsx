@@ -1,154 +1,226 @@
 'use client'
-import { use } from 'react'
+
+import { use, useEffect, useMemo, useState } from 'react'
 import useSWR from 'swr'
-import { useState } from 'react'
+
+type Item = {
+  id: string
+  label: string
+  key: string
+  type: 'NUMBER' | 'TEXT' | 'BOOL'
+  unit?: string | null
+  required: boolean
+  order: number
+}
+
+type ApiResponse = {
+  session: { id: string; name: string; product?: { name?: string }; templateId?: string }
+  items: Item[]
+  responses: Array<{
+    itemId: string
+    value: any
+    remark?: string | null
+  }>
+}
 
 const fetcher = (u: string) => fetch(u).then(r => r.json())
 
-export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
+function toFlatValue(v: any): string | number | boolean | '' {
+  // レスポンスのvalueは { value: X } の形でも来るので平坦化
+  if (v && typeof v === 'object' && 'value' in v) v = (v as any).value
+  if (typeof v === 'number') return v
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'string') return v
+  return ''
+}
+
+export default function SessionPage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
+  // Next.js 15 の params は Promise なので use() で展開
   const { id } = use(params)
-  const { data, mutate, isLoading } = useSWR(`/api/sessions/${id}`, fetcher)
+
+  const { data, mutate, isLoading } = useSWR<ApiResponse>(
+    `/api/sessions/${id}`,
+    fetcher
+  )
+
+  // 画面ローカルの編集用状態（全項目）
+  // form[itemId] = { value, remark }
+  const [form, setForm] = useState<Record<string, { value: any; remark?: string }>>({})
   const [saving, setSaving] = useState(false)
 
-  async function save(itemId: string, value: any) {
+  // 初期値を API から流し込む
+  useEffect(() => {
+    if (!data) return
+    const next: Record<string, { value: any; remark?: string }> = {}
+    for (const it of data.items) {
+      const r = data.responses.find(x => x.itemId === it.id)
+      const base = toFlatValue(r?.value)
+      next[it.id] = { value: base ?? (it.type === 'BOOL' ? false : '') }
+    }
+    setForm(next)
+  }, [data])
+
+  const header = useMemo(() => {
+    if (!data) return null
+    return (
+      <header className="mb-4">
+        <h1 className="text-2xl font-bold">{data.session.name ?? 'セッション'}</h1>
+        <p className="text-sm text-gray-500">
+          対象: {data.session.product?.name ?? '-'}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2 text-sm">
+          <a
+            className="inline-flex items-center gap-1 rounded-full border px-3 py-1 hover:bg-gray-50"
+            href={`/sessions/${id}/dashboard`}
+          >
+            📈 グラフ
+          </a>
+          <a
+            className="inline-flex items-center gap-1 rounded-full border px-3 py-1 hover:bg-gray-50"
+            href={`/api/export/sessions/${id}/csv`}
+          >
+            ⬇️ CSV
+          </a>
+          {data.session.templateId && (
+            <a
+              className="inline-flex items-center gap-1 rounded-full border px-3 py-1 hover:bg-gray-50"
+              href={`/templates/${data.session.templateId}/edit`}
+            >
+              ✚ 項目追加・編集
+            </a>
+          )}
+        </div>
+      </header>
+    )
+  }, [data, id])
+
+  // 入力変更ハンドラ（型ごとに整える）
+  function setValue(item: Item, raw: any) {
+    setForm(prev => {
+      const current = { ...(prev[item.id] || {}) }
+
+      if (item.type === 'NUMBER') {
+        const n = raw === '' ? '' : Number(raw)
+        current.value = Number.isFinite(n) ? n : ''
+      } else if (item.type === 'BOOL') {
+        current.value = raw === 'true' || raw === true
+      } else {
+        // TEXT
+        current.value = String(raw ?? '')
+      }
+
+      return { ...prev, [item.id]: current }
+    })
+  }
+
+  // 保存（まとめて保存）
+  async function handleSave() {
+    if (!data) return
     setSaving(true)
     try {
-      await fetch(`/api/sessions/${id}/response`, {
+      // payload を item の順に構築
+      const responses = data.items.map(it => {
+        const v = form[it.id]?.value
+        // API 側では { value: ... } でもそのままでも upsert 可能だが、
+        // ここでは { value: ... } で統一
+        return {
+          itemId: it.id,
+          value:
+            it.type === 'NUMBER'
+              ? (typeof v === 'number' ? v : Number(v || 0))
+              : it.type === 'BOOL'
+              ? Boolean(v)
+              : String(v ?? ''),
+        }
+      })
+
+      const res = await fetch(`/api/sessions/${id}/bulk-save`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ itemId, value }),
+        body: JSON.stringify({ responses }),
       })
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(text || '保存に失敗しました')
+      }
+
+      // 再取得
       await mutate()
+      // 軽いフィードバック
+      alert('保存しました')
+    } catch (e: any) {
+      console.error(e)
+      alert(e?.message ?? '保存に失敗しました')
     } finally {
       setSaving(false)
     }
   }
 
   if (isLoading || !data) {
-    return (
-      <div className="min-h-dvh grid place-items-center bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-black">
-        <div className="animate-pulse text-gray-500 dark:text-gray-400">Loading…</div>
-      </div>
-    )
+    return <div className="p-6 text-gray-500">Loading...</div>
   }
 
   return (
-    <main className="min-h-dvh bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-black">
-      {/* アクションバー（上部固定） */}
-<div className="sticky top-0 z-40 w-full border-b border-gray-200
-                bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-  <div className="mx-auto max-w-5xl px-4 py-2
-                  flex items-center gap-3 overflow-x-auto">
-    {/* 項目追加 */}
-    {data?.session?.templateId && (
-      <a href={`/templates/${data.session.templateId}/edit?session=${id}`}className="btn">
-          ＋ 項目追加
-      </a>
+    <main className="p-6 space-y-6">
+      {header}
 
-    )}
-
-    {/* グラフ */}
-    <a href={`/sessions/${id}/dashboard`} className="btn">
-      📈 グラフ
-    </a>
-
-    {/* CSV */}
-    <a href={`/api/export/sessions/${id}/csv`} className="btn">
-      ⬇️ CSV
-    </a>
-  </div>
-</div>
-
-      {/* Top Bar */}
-      <div className="sticky top-0 z-40 border-b border-gray-200/60 dark:border-white/10 backdrop-blur bg-white/70 dark:bg-zinc-900/70">
-        <div className="mx-auto max-w-4xl px-4 py-3 flex items-center justify-between">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              {data.session.name ?? 'セッション'}
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              対象：{data.session.product?.name ?? '-'}
-            </p>
-          </div>
-          <a
-            href={`/sessions/${id}/dashboard`}
-            className="hidden sm:inline-flex items-center gap-2 rounded-full border border-gray-300/70 dark:border-white/20 bg-white dark:bg-zinc-800 px-3 py-1.5 text-sm shadow-sm hover:bg-gray-50 dark:hover:bg-zinc-700"
-          >
-            <span>📈</span> グラフ
-          </a>
-        </div>
-
-        {/* Saving banner (global) */}
-        {saving && (
-          <div className="mx-auto max-w-4xl px-4 pb-3">
-            <div className="rounded-lg bg-amber-100 text-amber-900 dark:bg-amber-400/15 dark:text-amber-300 px-3 py-2 text-sm shadow-sm border border-amber-200/60 dark:border-amber-300/20">
-              保存中…
+      {/* 入力リスト */}
+      <section className="space-y-4">
+        {data.items.map(it => (
+          <div key={it.id} className="border rounded-xl p-4">
+            <div className="font-semibold">
+              {it.label}{' '}
+              <span className="text-xs text-gray-500">{it.unit ?? ''}</span>
             </div>
+
+            {/* フィールド */}
+            {it.type === 'NUMBER' && (
+              <input
+                type="number"
+                step="any"
+                className="mt-2 border rounded px-2 py-1 w-56"
+                value={form[it.id]?.value ?? ''}
+                onChange={e => setValue(it, e.currentTarget.value)}
+              />
+            )}
+
+            {it.type === 'TEXT' && (
+              <input
+                type="text"
+                className="mt-2 border rounded px-2 py-1 w-full max-w-xl"
+                value={form[it.id]?.value ?? ''}
+                onChange={e => setValue(it, e.currentTarget.value)}
+              />
+            )}
+
+            {it.type === 'BOOL' && (
+              <select
+                className="mt-2 border rounded px-2 py-1 w-40"
+                value={(form[it.id]?.value ?? false) ? 'true' : 'false'}
+                onChange={e => setValue(it, e.currentTarget.value)}
+              >
+                <option value="true">合格</option>
+                <option value="false">不合格</option>
+              </select>
+            )}
           </div>
-        )}
-      </div>
+        ))}
+      </section>
 
-      {/* Content */}
-      <div className="mx-auto max-w-4xl px-4 py-6 space-y-4">
-        {data.items.map((it: any) => {
-          const current = (data.responses as any[]).find((r: any) => r.itemId === it.id)?.value
-          const val = typeof current === 'object' && current ? (current as any).value : current
-
-          return (
-            <div
-              key={it.id}
-              className="group rounded-2xl border border-gray-200/70 dark:border-white/10 bg-white/70 dark:bg-zinc-900/70 backdrop-blur px-4 py-4 shadow-sm hover:shadow transition-shadow"
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <div className="text-sm sm:text-base font-medium text-gray-900 dark:text-white">
-                  {it.label}{' '}
-                  {it.unit ? (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">（{it.unit}）</span>
-                  ) : null}
-                </div>
-                {it.required && (
-                  <span className="text-[10px] rounded-full bg-rose-50 text-rose-600 dark:bg-rose-400/10 dark:text-rose-300 px-2 py-0.5 border border-rose-200/60 dark:border-rose-300/20">
-                    必須
-                  </span>
-                )}
-              </div>
-
-              <div className="mt-2">
-                {it.type === 'NUMBER' && (
-                  <input
-                    type="number"
-                    className="w-full rounded-xl border border-gray-300/70 dark:border-white/10 bg-white dark:bg-zinc-800 px-3 py-2 text-sm outline-none ring-0 focus:border-indigo-400 dark:focus:border-indigo-400"
-                    defaultValue={val ?? ''}
-                    onBlur={(e) => save(it.id, { value: Number(e.currentTarget.value) })}
-                  />
-                )}
-
-                {it.type === 'TEXT' && (
-                  <input
-                    type="text"
-                    className="w-full rounded-xl border border-gray-300/70 dark:border-white/10 bg-white dark:bg-zinc-800 px-3 py-2 text-sm outline-none ring-0 focus:border-indigo-400 dark:focus:border-indigo-400"
-                    defaultValue={val ?? ''}
-                    onBlur={(e) => save(it.id, { value: e.currentTarget.value })}
-                  />
-                )}
-
-                {it.type === 'BOOL' && (
-                  <div className="relative">
-                    <select
-                      className="w-full appearance-none rounded-xl border border-gray-300/70 dark:border-white/10 bg-white dark:bg-zinc-800 px-3 py-2 text-sm outline-none ring-0 focus:border-indigo-400 dark:focus:border-indigo-400"
-                      defaultValue={(val ?? false) ? 'true' : 'false'}
-                      onChange={(e) => save(it.id, { value: e.target.value === 'true' })}
-                    >
-                      <option value="true">合格</option>
-                      <option value="false">不合格</option>
-                    </select>
-                    <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">▾</div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        })}
+      {/* 一番下に保存ボタン（要求どおり） */}
+      <div className="pt-2">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-lg bg-black text-white px-5 py-2.5 hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? '保存中…' : 'すべて保存する'}
+        </button>
       </div>
     </main>
   )
