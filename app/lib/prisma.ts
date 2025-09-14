@@ -1,17 +1,19 @@
 // app/lib/prisma.ts
 import { PrismaClient } from '@prisma/client'
 
-// グローバルにキャッシュして開発中の複数インスタンス生成を防止
-const globalForPrisma = globalThis as unknown as {
-  prisma?: PrismaClient
+declare global {
+  // Node.js の hot reload 対策で、既存の PrismaClient を再利用するための型定義
+  // var を使うことでグローバルにキャッシュされます
+  // eslint-disable-next-line no-var
+  var _prisma: PrismaClient | undefined
 }
 
 export const prisma =
-  globalForPrisma.prisma ?? new PrismaClient()
+  global._prisma ??
+  new PrismaClient({
+    log: ['query', 'error', 'warn'], // ログ設定は好みに応じて
+  })
 
 if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma
+  global._prisma = prisma
 }
-
-// default と named 両方で使えるように export
-export default prisma
