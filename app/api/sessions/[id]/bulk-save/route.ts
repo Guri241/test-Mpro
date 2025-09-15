@@ -1,59 +1,86 @@
 // app/api/sessions/[id]/bulk-save/route.ts
-import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/app/lib/prisma'
+import prisma from '@/app/lib/prisma'
+import { Prisma } from '@prisma/client'
 
-/**
- * 期待するリクエストボディ例:
- * {
- *   "rows": [
- *     { "itemId": "xxxxx", "value": 123, "note": "任意" },
- *     { "itemId": "yyyyy", "value": true }
- *   ]
- * }
- */
 type Row = {
   itemId: string
   value: unknown
   note?: string | null
 }
-type Payload = { rows: Row[] }
+
+type Payload = {
+  rows: Row[]
+}
 
 export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } } // ← これが重要（Promise ではなく { id: string }）
+  request: Request,
+  { params }: { params: { id: string } }
 ) {
+  const sessionId = params.id
+
   try {
-    const sessionId = params.id
-    if (!sessionId) {
-      return NextResponse.json({ ok: false, message: 'session id required' }, { status: 400 })
-    }
-
     const body = (await request.json()) as Payload
-    if (!body || !Array.isArray(body.rows)) {
-      return NextResponse.json({ ok: false, message: 'invalid payload' }, { status: 400 })
+
+    if (!Array.isArray(body?.rows)) {
+      return new Response(
+        JSON.stringify({ ok: false, error: 'rows must be an array' }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      )
+    }
+    if (body.rows.length === 0) {
+      return new Response(JSON.stringify({ ok: true, count: 0 }), {
+        headers: { 'content-type': 'application/json' },
+      })
     }
 
-    // セッション存在チェック（任意）
-    const s = await prisma.session.findUnique({ where: { id: sessionId }, select: { id: true } })
-    if (!s) {
-      return NextResponse.json({ ok: false, message: 'session not found' }, { status: 404 })
-    }
+    const latestByItemId = new Map<string, Row>()
+    for (const r of body.rows) latestByItemId.set(r.itemId, r)
+    const rows = [...latestByItemId.values()]
 
-    // まとめて upsert
-    // Response テーブルのユニークキーが (sessionId, itemId) の想定
-    await prisma.$transaction(
-      body.rows.map((r) =>
-        prisma.response.upsert({
-          where: { sessionId_itemId: { sessionId, itemId: r.itemId } },
-          update: { value: r.value as any, note: r.note ?? null },
-          create: { sessionId, itemId: r.itemId, value: r.value as any, note: r.note ?? null },
-        }),
-      ),
+    const tx = rows.map((r) =>
+      prisma.response.upsert({
+        where: {
+          // ★ schema に name を付けている場合はこちらを使う
+          Response_sessionId_itemId_key: {
+            sessionId,
+            itemId: r.itemId,
+          },
+          // name を外している場合は下のコメントを使う
+          // sessionId_itemId: { sessionId, itemId: r.itemId },
+        },
+        update: {
+          value: r.value as Prisma.InputJsonValue,
+          remark: r.note ?? null,
+        },
+        create: {
+          sessionId,
+          itemId: r.itemId,
+          value: r.value as Prisma.InputJsonValue,
+          remark: r.note ?? null,
+        },
+      })
     )
 
-    return NextResponse.json({ ok: true })
-  } catch (e) {
-    console.error(e)
-    return NextResponse.json({ ok: false, message: 'server error' }, { status: 500 })
+    const results = await prisma.$transaction(tx)
+    return new Response(JSON.stringify({ ok: true, count: results.length }), {
+      headers: { 'content-type': 'application/json' },
+    })
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return new Response(
+        JSON.stringify({ ok: false, error: 'invalid JSON payload' }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      )
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      return new Response(
+        JSON.stringify({ ok: false, error: err.message, code: err.code }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      )
+    }
+    return new Response(
+      JSON.stringify({ ok: false, error: (err as Error).message ?? 'unexpected error' }),
+      { status: 500, headers: { 'content-type': 'application/json' } }
+    )
   }
 }
