@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { prisma } from '@/app/lib/prisma'
+import  prisma  from '@/app/lib/prisma'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0

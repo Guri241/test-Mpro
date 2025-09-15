@@ -14,9 +14,9 @@ type Payload = {
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
-  const sessionId = params.id
+  　const { id: sessionId } = await context.params
 
   try {
     const body = (await request.json()) as Payload
