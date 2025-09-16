@@ -1,19 +1,11 @@
 // app/api/export/sessions/[id]/csv/route.ts
-import { NextResponse } from 'next/server'
+import { NextResponse, NextRequest } from 'next/server'
 import prisma from '@/app/lib/prisma'
+import { unwrapParams, type RouteCtx } from '@/app/api/_lib/params'
 
-// context.params が Promise の環境/非Promise の環境どちらでも動くユーティリティ
-async function unwrapParams<T>(ctx: { params: T } | { params: Promise<T> }): Promise<T> {
-  const p: any = (ctx as any).params
-  return typeof p?.then === 'function' ? await p : p
-}
-
-/**
- * セッションの回答を CSV でエクスポート
- */
 export async function GET(
-  _req: Request,
-  ctx: { params: { id: string } } | { params: Promise<{ id: string }> }
+  _req: NextRequest,
+  ctx: RouteCtx<{ id: string }>
 ) {
   const { id: sessionId } = await unwrapParams(ctx)
 
@@ -38,11 +30,10 @@ export async function GET(
   })
   const valueMap = new Map(responses.map(r => [r.itemId, r]))
 
-  // ヘッダ + 1行（このセッション）
   const header = ['itemId', 'label', 'key', 'type', 'value', 'remark']
   const rows = items.map(it => {
     const r = valueMap.get(it.id)
-    const esc = (s: string) => s.replace(/"/g, '""')
+    const esc = (s: string) => (s ?? '').replace(/"/g, '""')
     return [
       it.id,
       esc(it.label ?? ''),

@@ -1,6 +1,7 @@
 // app/api/templates/[id]/reorder/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/app/lib/prisma'
+import { unwrapParams, type RouteCtx } from '@/app/api/_lib/params'
 
 /**
  * テンプレ内の項目順を並び替え
@@ -8,10 +9,11 @@ import prisma from '@/app/lib/prisma'
  */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } } // ← Promiseではない
+  ctx: RouteCtx<{ id: string }>
 ) {
-  const { id: templateId } = params
+  const { id: templateId } = await unwrapParams(ctx)
   const body = await request.json() as { itemIds: string[] }
+
   if (!Array.isArray(body?.itemIds) || body.itemIds.length === 0) {
     return NextResponse.json({ ok: false, error: 'itemIds must be a non-empty array' }, { status: 400 })
   }
@@ -20,7 +22,7 @@ export async function PATCH(
     body.itemIds.map((itemId, i) =>
       prisma.templateItem.update({
         where: { id: itemId },
-        data: { order: i + 1, templateId }, // 念のため templateId は維持
+        data: { order: i + 1, templateId },
       })
     )
   )

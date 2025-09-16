@@ -1,15 +1,16 @@
 // app/api/sessions/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/app/lib/prisma'
+import { unwrapParams, type RouteCtx } from '@/app/api/_lib/params'
 
 /**
  * セッションの概要 + テンプレ項目 + 既存回答を返す
  */
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } } // ← Promiseではない
+  ctx: RouteCtx<{ id: string }>
 ) {
-  const { id } = params
+  const { id } = await unwrapParams(ctx)
 
   const session = await prisma.session.findUnique({
     where: { id },

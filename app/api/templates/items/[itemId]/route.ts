@@ -1,15 +1,16 @@
 // app/api/templates/items/[itemId]/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/app/lib/prisma'
+import { unwrapParams, type RouteCtx } from '@/app/api/_lib/params'
 
 /**
  * テンプレ項目を削除
  */
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { itemId: string } } // ← Promiseではない
+  ctx: RouteCtx<{ itemId: string }>
 ) {
-  const { itemId } = params
+  const { itemId } = await unwrapParams(ctx)
   try {
     await prisma.templateItem.delete({ where: { id: itemId } })
     return NextResponse.json({ ok: true })
@@ -27,9 +28,9 @@ export async function DELETE(
  */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { itemId: string } }
+  ctx: RouteCtx<{ itemId: string }>
 ) {
-  const { itemId } = params
+  const { itemId } = await unwrapParams(ctx)
   const data = await request.json()
   try {
     const updated = await prisma.templateItem.update({

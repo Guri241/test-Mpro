@@ -1,6 +1,7 @@
 // app/api/templates/[id]/items/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/app/lib/prisma'
+import { unwrapParams, type RouteCtx } from '@/app/api/_lib/params'
 
 /**
  * テンプレに項目を追加
@@ -8,9 +9,9 @@ import prisma from '@/app/lib/prisma'
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } } // ← Promiseではない
+  ctx: RouteCtx<{ id: string }>
 ) {
-  const { id: templateId } = params
+  const { id: templateId } = await unwrapParams(ctx)
   const body = await request.json() as {
     label: string; key: string; type: 'TEXT'|'NUMBER'|'BOOL';
     unit?: string|null; required?: boolean; weight?: number; options?: any
