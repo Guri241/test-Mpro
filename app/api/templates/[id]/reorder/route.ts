@@ -1,20 +1,26 @@
-import  prisma  from '@/app/lib/prisma'
-import { NextResponse } from 'next/server'
+// app/api/templates/[id]/reorder/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import prisma from '@/app/lib/prisma'
 
+/**
+ * テンプレ内の項目順を並び替え
+ * body: { itemIds: string[] } // 先頭から順に order=1,2,3...
+ */
 export async function PATCH(
-  req: Request,
-  ctx: { params: Promise<{ id: string }> }
+  request: NextRequest,
+  { params }: { params: { id: string } } // ← Promiseではない
 ) {
-  const { id: templateId } = await ctx.params
-  const { itemIds }:{ itemIds: string[] } = await req.json()
-  if (!Array.isArray(itemIds) || itemIds.length === 0) {
-    return NextResponse.json({ error: 'itemIds required' }, { status: 400 })
+  const { id: templateId } = params
+  const body = await request.json() as { itemIds: string[] }
+  if (!Array.isArray(body?.itemIds) || body.itemIds.length === 0) {
+    return NextResponse.json({ ok: false, error: 'itemIds must be a non-empty array' }, { status: 400 })
   }
+
   await prisma.$transaction(
-    itemIds.map((id, idx) =>
+    body.itemIds.map((itemId, i) =>
       prisma.templateItem.update({
-        where: { id },
-        data: { order: (idx + 1) * 10 },
+        where: { id: itemId },
+        data: { order: i + 1, templateId }, // 念のため templateId は維持
       })
     )
   )

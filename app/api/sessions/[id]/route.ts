@@ -1,31 +1,37 @@
 // app/api/sessions/[id]/route.ts
-import  prisma  from '@/app/lib/prisma'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import prisma from '@/app/lib/prisma'
 
+/**
+ * セッションの概要 + テンプレ項目 + 既存回答を返す
+ */
 export async function GET(
-  _req: Request,
-  ctx: { params: Promise<{ id: string }> }
+  _req: NextRequest,
+  { params }: { params: { id: string } } // ← Promiseではない
 ) {
-  const { id } = await ctx.params
+  const { id } = params
 
-  const s = await prisma.session.findUnique({
+  const session = await prisma.session.findUnique({
     where: { id },
-    include: {
-      template: { include: { items: { orderBy: { order: 'asc' } } } },
-      responses: {
-        include: { item: { select: { id: true, label: true } } }, // ラベルを前段で使う
-        orderBy: { createdAt: 'asc' },                            // ★ここを追加
-        // createdAt が無ければ: orderBy: { id: 'asc' } でも可
-      },
-      product: true,
+    select: { id: true, name: true, templateId: true },
+  })
+  if (!session) {
+    return NextResponse.json({ ok: false, error: 'session not found' }, { status: 404 })
+  }
+
+  const items = await prisma.templateItem.findMany({
+    where: { templateId: session.templateId },
+    orderBy: { order: 'asc' },
+    select: {
+      id: true, label: true, type: true, required: true, unit: true, options: true, order: true,
     },
   })
 
-  if (!s) return new NextResponse('not found', { status: 404 })
-
-  return NextResponse.json({
-    session: { id: s.id, name: s.name, product: s.product, templateId: s.templateId },
-    items: s.template.items,
-    responses: s.responses, // ← createdAt の昇順で返る
+  const responses = await prisma.response.findMany({
+    where: { sessionId: session.id },
+    select: { itemId: true, value: true, remark: true },
+    orderBy: { createdAt: 'asc' },
   })
+
+  return NextResponse.json({ session, items, responses })
 }

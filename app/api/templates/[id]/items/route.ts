@@ -1,27 +1,48 @@
-import  prisma  from '@/app/lib/prisma'
-import { NextResponse } from 'next/server'
+// app/api/templates/[id]/items/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import prisma from '@/app/lib/prisma'
 
+/**
+ * テンプレに項目を追加
+ * body: { label: string; key: string; type: 'TEXT'|'NUMBER'|'BOOL'; unit?: string|null; required?: boolean; weight?: number; options?: any }
+ */
 export async function POST(
-  req: Request,
-  ctx: { params: Promise<{ id: string }> }
+  request: NextRequest,
+  { params }: { params: { id: string } } // ← Promiseではない
 ) {
-  const { id: templateId } = await ctx.params
-  const { label, key, type, unit, required, weight } = await req.json()
+  const { id: templateId } = params
+  const body = await request.json() as {
+    label: string; key: string; type: 'TEXT'|'NUMBER'|'BOOL';
+    unit?: string|null; required?: boolean; weight?: number; options?: any
+  }
 
-  const last = await prisma.templateItem.findFirst({
+  if (!body?.label || !body?.key || !body?.type) {
+    return NextResponse.json({ ok: false, error: 'label, key, type are required' }, { status: 400 })
+  }
+
+  // 次の order を決める
+  const max = await prisma.templateItem.aggregate({
     where: { templateId },
-    orderBy: { order: 'desc' },
+    _max: { order: true },
   })
-  const nextOrder = last ? last.order + 1 : 1
+  const nextOrder = (max._max.order ?? 0) + 1
 
-  const item = await prisma.templateItem.create({
+  const created = await prisma.templateItem.create({
     data: {
-      templateId, label, key, type, unit,
-      required: !!required,
-      weight: weight ?? 1,
+      templateId,
+      label: body.label,
+      key: body.key,
+      type: body.type,
+      unit: body.unit ?? null,
+      required: !!body.required,
       order: nextOrder,
+      options: body.options ?? null,
+      weight: body.weight ?? 1,
+    },
+    select: {
+      id: true, label: true, key: true, type: true, required: true, unit: true, order: true, options: true,
     },
   })
 
-  return NextResponse.json(item)
+  return NextResponse.json({ ok: true, item: created })
 }

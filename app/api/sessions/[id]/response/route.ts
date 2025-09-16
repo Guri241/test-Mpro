@@ -1,33 +1,49 @@
 // app/api/sessions/[id]/response/route.ts
-import  prisma  from '@/app/lib/prisma'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import prisma from '@/app/lib/prisma'
+import { Prisma } from '@prisma/client'
 
+/**
+ * 指定セッションの単一回答を upsert するAPI（itemId, value を受け取る）
+ * body: { itemId: string; value: unknown; note?: string | null }
+ */
 export async function POST(
-  req: Request,
-  ctx: { params: Promise<{ id: string }> }
+  request: NextRequest,
+  { params }: { params: { id: string } } // ← Promiseではない
 ) {
-  const { id: sessionId } = await ctx.params
-  const { itemId, value, remark } = await req.json()
-
-  if (!itemId) return NextResponse.json({ error: 'itemId is required' }, { status: 400 })
-
-  const item = await prisma.templateItem.findUnique({ where: { id: itemId } })
-  if (!item) return NextResponse.json({ error: 'item not found' }, { status: 404 })
-
-  // スコア算出（必要なら）
-  let scored: number | null = null
-  if (item.type === 'NUMBER') {
-    const v = Number((value as any)?.value ?? value)
-    scored = Number.isFinite(v) ? v : null
-  } else if (item.type === 'BOOL') {
-    const v = Boolean((value as any)?.value ?? value)
-    scored = v ? 1 : 0
+  const { id: sessionId } = params
+  try {
+    const body = await request.json() as { itemId: string; value: unknown; note?: string | null }
+    if (!body?.itemId) {
+      return NextResponse.json({ ok: false, error: 'itemId is required' }, { status: 400 })
+    }
+    const value = JSON.parse(JSON.stringify(body.value)) as Prisma.InputJsonValue
+    await prisma.response.upsert({
+      where: { sessionId_itemId: { sessionId, itemId: body.itemId } },
+      update: { value, remark: body.note ?? null },
+      create: { sessionId, itemId: body.itemId, value, remark: body.note ?? null },
+    })
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: (err as Error).message ?? 'unexpected error' },
+      { status: 400 }
+    )
   }
+}
 
-  // ★毎回新規レコードを追加
-  const created = await prisma.response.create({
-    data: { sessionId, itemId, value, remark, scored }
+/**
+ * 指定セッションの回答一覧を返す
+ */
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const { id: sessionId } = params
+  const responses = await prisma.response.findMany({
+    where: { sessionId },
+    select: { itemId: true, value: true, remark: true, createdAt: true, updatedAt: true },
+    orderBy: { createdAt: 'asc' },
   })
-
-  return NextResponse.json(created, { status: 201 })
+  return NextResponse.json({ ok: true, responses })
 }
