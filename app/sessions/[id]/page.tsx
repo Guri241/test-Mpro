@@ -1,16 +1,62 @@
 'use client'
 
-import { use, useState } from 'react'
+import { use, useMemo, useState } from 'react'
 import useSWR from 'swr'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 
-const fetcher = (u: string) => fetch(u).then(r => r.json())
+const fetcher = (u: string) => fetch(u).then((r) => r.json())
 
-export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
+type Item = {
+  id: string
+  label: string
+  type: 'TEXT' | 'NUMBER' | 'BOOL'
+  required?: boolean
+  unit?: string | null
+  options?: any
+}
+
+type SessionApiResponse = {
+  session: { id: string; name: string; templateId: string } // ← templateId を必須で受ける
+  items: Item[]
+  responses?: Array<{ itemId: string; value: any; remark?: string | null }>
+}
+
+export default function SessionPage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
   const { id } = use(params)
-  const { data, isLoading, mutate } = useSWR(`/api/sessions/${id}`, fetcher)
+  const search = useSearchParams()
+  const sessionFromQuery = search.get('session')
 
-  // 入力値をまとめて管理する state
-  const [values, setValues] = useState<Record<string, string | number | boolean>>({})
+  const { data, isLoading, mutate } = useSWR<SessionApiResponse>(
+    `/api/sessions/${id}`,
+    fetcher
+  )
+
+  const initialValues = useMemo<Record<string, string | number | boolean>>(() => {
+    const map: Record<string, string | number | boolean> = {}
+    if (data?.responses?.length) {
+      for (const r of data.responses) {
+        map[r.itemId] = r.value as any
+      }
+    }
+    return map
+  }, [data])
+
+  const [values, setValues] = useState<Record<string, string | number | boolean>>(
+    initialValues
+  )
+
+  if (
+    data &&
+    Object.keys(values).length === 0 &&
+    Object.keys(initialValues).length > 0
+  ) {
+    setValues(initialValues)
+  }
 
   if (isLoading || !data) {
     return (
@@ -20,63 +66,144 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     )
   }
 
-  // 入力変更ハンドラ
-  const handleChange = (itemId: string, value: string | number | boolean) => {
-    setValues(prev => ({ ...prev, [itemId]: value }))
+  const sessionId = sessionFromQuery ?? data.session.id
+  const templateId = data.session.templateId // ✅ これを使う
+
+  const handleChange = (itemId: string, next: string | number | boolean) => {
+    setValues((prev) => ({ ...prev, [itemId]: next }))
   }
 
-  // 一斉保存処理
-  const handleSave = async () => {
-    const res = await fetch(`/api/sessions/${id}/bulk-save`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ values }),
-    })
+  const coerceValueByType = (type: Item['type'], raw: any) => {
+    if (type === 'NUMBER') {
+      if (raw === '' || raw === null || raw === undefined) return null
+      const n = typeof raw === 'number' ? raw : Number(raw)
+      return Number.isFinite(n) ? n : null
+    }
+    if (type === 'BOOL') return Boolean(raw)
+    return raw == null ? '' : String(raw)
+  }
 
-    if (res.ok) {
+  const handleSave = async () => {
+    try {
+      const rows = data.items.map((item) => {
+        const raw = values[item.id]
+        const value = coerceValueByType(item.type, raw)
+        return { itemId: item.id, value }
+      })
+
+      const res = await fetch(`/api/sessions/${id}/bulk-save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      })
+
+      const payload = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        console.error('bulk-save failed:', payload)
+        alert(`保存失敗:\n${JSON.stringify(payload, null, 2)}`)
+        return
+      }
+
       alert('保存しました')
-      mutate() // 再取得して反映
-    } else {
-      alert('保存に失敗しました')
+      mutate()
+    } catch (e: any) {
+      console.error(e)
+      alert(`保存失敗（例外）:\n${e?.message ?? String(e)}`)
     }
   }
 
   return (
     <main className="min-h-dvh bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-black">
+      {/* アクションバー */}
+      <div className="sticky top-0 z-40 w-full border-b border-gray-200 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-zinc-700 dark:bg-zinc-900/80">
+        <div className="mx-auto max-w-3xl px-4 py-2 flex items-center gap-3 overflow-x-auto">
+          <>
+            {/* ← 項目追加 → テンプレ編集へ（templateId を使う） */}
+            <Link
+              prefetch={false}
+              href={`/templates/${templateId}/edit`}
+              className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800"
+            >
+              ← 項目追加
+            </Link>
+            <Link
+              prefetch={false}
+              href={`/sessions/${sessionId}/dashboard`}
+              className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800"
+            >
+              📈 グラフ
+            </Link>
+            <Link
+              prefetch={false}
+              href={`/api/export/sessions/${sessionId}/csv`}
+              className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800"
+            >
+              ⬇️ CSV
+            </Link>
+          </>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => mutate()}
+              className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800"
+              title="再読込"
+            >
+              再読込
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white shadow hover:bg-blue-700"
+              title="保存"
+            >
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="mx-auto max-w-3xl px-4 py-6 space-y-6">
         <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
           {data.session.name}
         </h1>
 
-        {/* 入力フォーム */}
-        {data.items.map((item: any) => (
-          <div key={item.id} className="rounded-lg border p-4 bg-white dark:bg-zinc-800">
-            <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
-              {item.label}
-            </label>
-            <input
-              type={item.type === 'NUMBER' ? 'number' : item.type === 'BOOL' ? 'checkbox' : 'text'}
-              value={
-                item.type === 'BOOL'
-                  ? undefined // チェックボックスは value ではなく checked を使う
-                  : String(values[item.id] ?? '')
-              }
-              checked={item.type === 'BOOL' ? Boolean(values[item.id]) : undefined}
-              onChange={e =>
-                handleChange(
-                  item.id,
-                  item.type === 'BOOL'
-                    ? e.target.checked
-                    : e.target.value
-                )
-              }
-              className="w-full rounded-md border px-3 py-2 text-sm text-gray-900 dark:text-white dark:bg-zinc-700"
-            />
+        {data.items.map((item) => {
+          const v = values[item.id]
+          const isBool = item.type === 'BOOL'
+          const isNum = item.type === 'NUMBER'
 
-          </div>
-        ))}
+          return (
+            <div key={item.id} className="rounded-lg border p-4 bg-white dark:bg-zinc-800">
+              <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                {item.label}
+              </label>
 
-        {/* 保存ボタン（ページ最下部） */}
+              {isBool ? (
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(v)}
+                    onChange={(e) => handleChange(item.id, e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">ON/OFF</span>
+                </div>
+              ) : (
+                <input
+                  type={isNum ? 'number' : 'text'}
+                  value={v == null ? '' : String(v)}
+                  onChange={(e) =>
+                    handleChange(item.id, isNum ? e.target.value : e.target.value)
+                  }
+                  className="w-full rounded-md border px-3 py-2 text-sm text-gray-900 dark:text-white dark:bg-zinc-700"
+                />
+              )}
+            </div>
+          )
+        })}
+
+        {/* フッター保存 */}
         <div className="pt-6">
           <button
             onClick={handleSave}

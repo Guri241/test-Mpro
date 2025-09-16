@@ -116,12 +116,10 @@ model Response {
   updatedById String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
-
-  // この index は任意（ユニークを貼ると内部的に index も作られます）
-  // @@index([sessionId, itemId, createdAt])
+  @@index([sessionId, itemId, createdAt])
 
   // これを追加（複合ユニーク）
-  @@unique([sessionId, itemId], name: "Response_sessionId_itemId_key")
+  @@unique([sessionId, itemId])
 }
 
 model Attachment {
