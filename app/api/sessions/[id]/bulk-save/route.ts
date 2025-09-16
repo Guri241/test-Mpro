@@ -25,17 +25,21 @@ function toJsonSafe(value: unknown) {
 
 export async function POST(
   request: NextRequest,
-  ctx: { params: { id: string } }   // ← Promise ではなく素のオブジェクト
+  { params }: { params: { id: string } }   // ← Promise ではない
 ) {
-  const { id: sessionId } = ctx.params
+  const { id: sessionId } = params
 
   try {
     const body = (await request.json()) as Payload
+
+    // { values: {...} } で来た互換入力も rows に変換（任意）
+    if (!Array.isArray((body as any)?.rows) && body && typeof (body as any).values === 'object') {
+      const values = (body as any).values as Record<string, unknown>
+      ;(body as any).rows = Object.entries(values).map(([itemId, value]) => ({ itemId, value }))
+    }
+
     if (!Array.isArray(body?.rows)) {
-      return NextResponse.json(
-        { ok: false, error: 'rows must be an array' },
-        { status: 400 }
-      )
+      return NextResponse.json({ ok: false, error: 'rows must be an array' }, { status: 400 })
     }
 
     const rows = dedupeRows(body.rows).map((r) => ({
@@ -52,12 +56,7 @@ export async function POST(
       prisma.response.upsert({
         where: { sessionId_itemId: { sessionId, itemId: r.itemId } },
         update: { value: r.value, remark: r.remark },
-        create: {
-          sessionId,
-          itemId: r.itemId,
-          value: r.value,
-          remark: r.remark,
-        },
+        create: { sessionId, itemId: r.itemId, value: r.value, remark: r.remark },
       })
     )
 
@@ -67,21 +66,12 @@ export async function POST(
     console.error('[bulk-save error]', err)
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
       return NextResponse.json(
-        {
-          ok: false,
-          code: err.code,
-          message: err.message,
-          meta: err.meta,
-        },
+        { ok: false, code: err.code, message: err.message, meta: err.meta },
         { status: 400 }
       )
     }
     return NextResponse.json(
-      {
-        ok: false,
-        message: (err as Error).message ?? 'unexpected error',
-        stack: (err as Error).stack,
-      },
+      { ok: false, message: (err as Error).message ?? 'unexpected error' },
       { status: 400 }
     )
   }
