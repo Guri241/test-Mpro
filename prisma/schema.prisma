@@ -1,4 +1,4 @@
-// ===== prisma/schema.prisma ここから =====
+// ===== prisma/schema.prisma 全文 =====
 generator client {
   provider = "prisma-client-js"
 }
@@ -83,6 +83,9 @@ model TemplateItem {
   order       Int                @default(0)
   responses   Response[]
   attachments Attachment[]
+
+  // 履歴の逆リレーション
+  samples     ResponseSample[]
 }
 
 model Session {
@@ -99,6 +102,9 @@ model Session {
   responses   Response[]
   attachments Attachment[]
   tags        SessionTag[]
+
+  // 履歴の逆リレーション
+  samples     ResponseSample[]
 }
 
 model Response {
@@ -117,8 +123,6 @@ model Response {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   @@index([sessionId, itemId, createdAt])
-
-  // これを追加（複合ユニーク）
   @@unique([sessionId, itemId])
 }
 
@@ -161,4 +165,18 @@ model AuditLog {
   createdAt DateTime @default(now())
 }
 
-// ===== prisma/schema.prisma ここまで =====
+/**
+ * === 履歴テーブル (append-only の時系列) ===
+ */
+model ResponseSample {
+  id        String       @id @default(uuid())
+  session   Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId String
+  item      TemplateItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId    String
+  value     Json
+  remark    String?
+  sampledAt DateTime     @default(now())
+
+  @@index([sessionId, itemId, sampledAt])
+}

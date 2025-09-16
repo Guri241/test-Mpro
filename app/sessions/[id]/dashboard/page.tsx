@@ -15,11 +15,20 @@ function toNumber(v: any): number | null {
   return null
 }
 
+type Timeseries = {
+  ok: boolean
+  samples: Array<{ itemId: string; value: any; remark?: string | null; sampledAt: string }>
+}
+
 export default function DashboardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const { data, isLoading } = useSWR(`/api/sessions/${id}`, fetcher)
 
-  if (isLoading || !data) {
+  // ① セッションの基本情報（項目ラベル等）
+  const { data: base, isLoading: loadingBase } = useSWR(`/api/sessions/${id}`, fetcher)
+  // ② 履歴（保存のたびに増える）
+  const { data: ts, isLoading: loadingTs } = useSWR<Timeseries>(`/api/sessions/${id}/timeseries`, fetcher)
+
+  if (loadingBase || loadingTs || !base || !ts) {
     return (
       <div className="min-h-dvh grid place-items-center bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-black">
         <div className="animate-pulse text-gray-500 dark:text-gray-400">Loading…</div>
@@ -27,29 +36,32 @@ export default function DashboardPage({ params }: { params: Promise<{ id: string
     )
   }
 
-  // seriesMap[itemId] = [turn1, turn2, ...]
-  const seriesMap: Record<string, number[]> = {}
-  let maxLen = 0
-  for (const it of data.items as any[]) {
-    const responsesForItem = (data.responses as any[])
-      .filter((r: any) => r.itemId === it.id)
-      .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+  // itemId -> {label, unit}
+  const items: Array<{ id: string; label: string; unit?: string | null }> =
+    (base.items as any[]).map((it: any) => ({ id: it.id, label: it.label, unit: it.unit ?? null }))
 
-    const arr: number[] = []
-    for (const r of responsesForItem) {
-      const num = toNumber(r.value)
-      if (num !== null) arr.push(num)
+  // === 重要：保存単位（=同じ sampledAt）でまとめて「回(turn)」を作る ===
+  // key は ミリ秒まで含む ISO（slice で丸めない）
+  const bySave = new Map<string, Record<string, any>>() // timeISO -> {timeISO, [itemId]: number}
+  for (const s of ts.samples) {
+    const iso = new Date(s.sampledAt).toISOString()
+    const row = bySave.get(iso) ?? { time: iso }
+    const num = toNumber(s.value)
+    if (num !== null) row[s.itemId] = num
+    bySave.set(iso, row)
+  }
+
+  // 時間順に並べ、「回(turn)」を 1..N で振り直しつつ、列はラベル名で出す
+  const chartData: Array<Record<string, any>> = []
+  const timeRows = Array.from(bySave.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  timeRows.forEach(([_, rec], idx) => {
+    const row: any = { turn: idx + 1 }
+    for (const it of items) {
+      const v = rec[it.id]
+      row[it.label] = typeof v === 'number' ? v : null
     }
-    seriesMap[it.id] = arr
-    if (arr.length > maxLen) maxLen = arr.length
-  }
-
-  const chartData: any[] = []
-  for (let k = 0; k < maxLen; k++) {
-    const row: any = { turn: k + 1 }
-    for (const it of data.items as any[]) row[it.label] = seriesMap[it.id]?.[k] ?? null
     chartData.push(row)
-  }
+  })
 
   const palette = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ca8a04', '#0ea5e9', '#db2777', '#059669']
 
@@ -60,10 +72,10 @@ export default function DashboardPage({ params }: { params: Promise<{ id: string
         <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
           <div>
             <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              {data.session.name ?? 'セッション'}：折れ線グラフ
+              {base.session?.name ?? 'セッション'}：折れ線グラフ
             </h1>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              入力回数 × 項目の推移
+              入力回数 × 項目の推移（履歴から生成）
             </p>
           </div>
           <a
@@ -91,7 +103,7 @@ export default function DashboardPage({ params }: { params: Promise<{ id: string
                 <YAxis tick={{ fontSize: 12 }} />
                 <Tooltip />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                {(data.items as any[]).map((it: any, i: number) => (
+                {items.map((it, i) => (
                   <Line
                     key={it.id}
                     type="monotone"
@@ -102,42 +114,42 @@ export default function DashboardPage({ params }: { params: Promise<{ id: string
                     dot={{ r: 3 }}
                     activeDot={{ r: 5 }}
                   />
-                  
                 ))}
               </LineChart>
             </ResponsiveContainer>
-                    <div className="mt-6 rounded-2xl border border-gray-200/70 dark:border-white/10 bg-white/70 dark:bg-zinc-900/70 backdrop-blur shadow-sm overflow-x-auto">
-                      <table className="min-w-[720px] w-full text-base">
-                        <thead className="bg-gray-50/80 dark:bg-zinc-800/60">
-                          <tr>
-                            <th className="px-4 py-3 text-left w-16 font-bold text-lg">回</th>
-                            {(data.items as any[]).map((it: any) => (
-                              <th key={it.id} className="px-4 py-3 text-left font-bold text-lg">
-                                {it.label}
-                                {it.unit ? (
-                                  <span className="text-sm text-gray-500 ml-1">（{it.unit}）</span>
-                                ) : null}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {chartData.map((row: any, idx: number) => (
-                            <tr
-                              key={idx}
-                              className="border-t border-gray-100 dark:border-white/10 hover:bg-gray-50/60 dark:hover:bg-zinc-800/50"
-                            >
-                              <td className="px-4 py-3">{row.turn}</td>
-                              {(data.items as any[]).map((it: any) => (
-                                <td key={it.id} className="px-4 py-3">
-                                  {row[it.label] ?? '-'}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+
+            {/* 表 */}
+            <div className="mt-6 rounded-2xl border border-gray-200/70 dark:border-white/10 bg-white/70 dark:bg-zinc-900/70 backdrop-blur shadow-sm overflow-x-auto">
+              <table className="min-w-[720px] w-full text-base">
+                <thead className="bg-gray-50/80 dark:bg-zinc-800/60">
+                  <tr>
+                    <th className="px-4 py-3 text-left w-16 font-bold text-lg">回</th>
+                    {items.map((it) => (
+                      <th key={it.id} className="px-4 py-3 text-left font-bold text-lg">
+                        {it.label}
+                        {it.unit ? <span className="text-sm text-gray-500 ml-1">（{it.unit}）</span> : null}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {chartData.map((row: any, idx: number) => (
+                    <tr
+                      key={idx}
+                      className="border-t border-gray-100 dark:border-white/10 hover:bg-gray-50/60 dark:hover:bg-zinc-800/50"
+                    >
+                      <td className="px-4 py-3">{row.turn}</td>
+                      {items.map((it) => (
+                        <td key={it.id} className="px-4 py-3">
+                          {row[it.label] ?? '-'}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
           </div>
         </div>
       </div>
