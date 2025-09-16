@@ -1,15 +1,21 @@
 // app/api/export/sessions/[id]/csv/route.ts
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import prisma from '@/app/lib/prisma'
+
+// context.params が Promise の環境/非Promise の環境どちらでも動くユーティリティ
+async function unwrapParams<T>(ctx: { params: T } | { params: Promise<T> }): Promise<T> {
+  const p: any = (ctx as any).params
+  return typeof p?.then === 'function' ? await p : p
+}
 
 /**
  * セッションの回答を CSV でエクスポート
  */
 export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } } // ← Promiseではない
+  _req: Request,
+  ctx: { params: { id: string } } | { params: Promise<{ id: string }> }
 ) {
-  const { id: sessionId } = params
+  const { id: sessionId } = await unwrapParams(ctx)
 
   // セッション + テンプレ項目
   const session = await prisma.session.findUnique({
@@ -36,13 +42,14 @@ export async function GET(
   const header = ['itemId', 'label', 'key', 'type', 'value', 'remark']
   const rows = items.map(it => {
     const r = valueMap.get(it.id)
+    const esc = (s: string) => s.replace(/"/g, '""')
     return [
       it.id,
-      it.label?.replace(/"/g, '""') ?? '',
-      it.key?.replace(/"/g, '""') ?? '',
+      esc(it.label ?? ''),
+      esc(it.key ?? ''),
       it.type,
       JSON.stringify(r?.value ?? null).replace(/"/g, '""'),
-      (r?.remark ?? '').toString().replace(/"/g, '""'),
+      esc((r?.remark ?? '').toString()),
     ].map(v => `"${v}"`).join(',')
   })
   const csv = [header.join(','), ...rows].join('\n')
