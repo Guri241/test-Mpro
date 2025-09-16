@@ -1,12 +1,13 @@
 // app/api/templates/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/app/lib/prisma'
+import { unwrapParams, type RouteCtx } from '@/app/api/_lib/params'
 
 export async function GET(
   _req: NextRequest,
-  ctx: { params: { id: string } }
+  ctx: RouteCtx<{ id: string }>
 ) {
-  const { id } = ctx.params
+  const { id } = await unwrapParams(ctx)
 
   const template = await prisma.evaluationTemplate.findUnique({
     where: { id },
